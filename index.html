@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>AES 加密 / 解密工具</title>
+<title>AES 加密 / 解密(支持自定义字符集)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js"></script>
 <style>
     * { box-sizing: border-box; }
@@ -22,12 +22,12 @@
         box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         padding: 30px;
         width: 100%;
-        max-width: 700px;
+        max-width: 720px;
     }
     h1 {
         text-align: center;
         color: #4a4a8a;
-        margin-bottom: 25px;
+        margin-bottom: 20px;
     }
     label {
         display: block;
@@ -66,16 +66,27 @@
     button:hover { opacity: 0.85; }
     .row { display: flex; gap: 10px; }
     .row > div { flex: 1; }
-    .tip {
-        font-size: 12px;
-        color: #888;
-        margin-top: 4px;
+    .tip { font-size: 12px; color: #888; margin-top: 4px; }
+    .preset {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
     }
+    .preset span {
+        background: #eef;
+        color: #335;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        cursor: pointer;
+    }
+    .preset span:hover { background: #ccf; }
 </style>
 </head>
 <body>
 <div class="container">
-    <h1>🔐 AES 加密 / 解密工具</h1>
+    <h1>🔐 AES 加密 / 解密(自定义字符集)</h1>
 
     <label>明文 / 密文输入:</label>
     <textarea id="inputText" placeholder="请输入需要加密或解密的内容..."></textarea>
@@ -83,20 +94,31 @@
     <div class="row">
         <div>
             <label>密钥 (Key):</label>
-            <input type="password" id="secretKey" placeholder="请输入密钥">
+            <input type="password" id="secretKey" placeholder="请输入密钥" value="1234567890abcdef">
             <div class="tip">建议 16 / 24 / 32 位字符</div>
         </div>
         <div>
-            <label>加密模式:</label>
-            <select id="mode">
-                <option value="CBC">CBC</option>
-                <option value="ECB">ECB</option>
-            </select>
+            <label>IV 偏移量 (CBC):</label>
+            <input type="text" id="ivKey" placeholder="16位字符" value="1234567890abcdef">
         </div>
     </div>
 
-    <label>IV 偏移量 (CBC模式必填,16位):</label>
-    <input type="text" id="ivKey" placeholder="例如: 1234567890abcdef" value="1234567890abcdef">
+    <label>加密模式:</label>
+    <select id="mode">
+        <option value="CBC">CBC</option>
+        <option value="ECB">ECB</option>
+    </select>
+
+    <label>🎨 自定义字符集(密文将用这些字符表示,至少 2 个,字符不能重复):</label>
+    <input type="text" id="charset" value="哈基米南北绿豆" placeholder="例如:哈基米">
+    <div class="preset">
+        <span onclick="setCharset('哈基米')">哈基米</span>
+        <span onclick="setCharset('哈基米南北绿豆')">哈基米南北绿豆</span>
+        <span onclick="setCharset('鸡你太美')">鸡你太美</span>
+        <span onclick="setCharset('01')">二进制 01</span>
+        <span onclick="setCharset('0123456789abcdef')">十六进制</span>
+        <span onclick="setCharset('🐱🐶🐰🐼🐨🦊🐸🐵')">Emoji</span>
+    </div>
 
     <div class="btn-group">
         <button class="btn-encrypt" onclick="encryptText()">加密</button>
@@ -109,6 +131,7 @@
 </div>
 
 <script>
+/* ====== 工具:取密钥与 IV ====== */
 function getKeyAndIV() {
     const key = document.getElementById('secretKey').value;
     const iv  = document.getElementById('ivKey').value;
@@ -119,10 +142,82 @@ function getKeyAndIV() {
     };
 }
 
+/* ====== 工具:获取字符集(去重,使用 Array.from 兼容 Emoji) ====== */
+function getCharset() {
+    const raw = document.getElementById('charset').value;
+    const arr = Array.from(new Set(Array.from(raw)));
+    if (arr.length < 2) {
+        alert("自定义字符集至少需要 2 个不同字符!");
+        return null;
+    }
+    return arr;
+}
+
+function setCharset(s) {
+    document.getElementById('charset').value = s;
+}
+
+/* ====== 大整数进制转换:把字节数组按自定义字符集编码 ====== */
+// 字节数组 -> 自定义字符集字符串
+function bytesToCustom(bytes, charset) {
+    const base = BigInt(charset.length);
+    // 用 0x01 前缀保留前导零信息
+    let num = 1n;
+    for (const b of bytes) num = (num << 8n) | BigInt(b);
+
+    if (num === 0n) return charset[0];
+    let out = '';
+    while (num > 0n) {
+        out = charset[Number(num % base)] + out;
+        num /= base;
+    }
+    return out;
+}
+
+// 自定义字符集字符串 -> 字节数组
+function customToBytes(str, charset) {
+    const base = BigInt(charset.length);
+    const map = new Map();
+    charset.forEach((c, i) => map.set(c, BigInt(i)));
+
+    let num = 0n;
+    for (const ch of Array.from(str)) {
+        if (!map.has(ch)) throw new Error("密文中包含字符集外的字符: " + ch);
+        num = num * base + map.get(ch);
+    }
+
+    const bytes = [];
+    while (num > 1n) {
+        bytes.unshift(Number(num & 0xFFn));
+        num >>= 8n;
+    }
+    return bytes;
+}
+
+/* ====== 字节数组 <-> CryptoJS WordArray ====== */
+function bytesToWordArray(bytes) {
+    const words = [];
+    for (let i = 0; i < bytes.length; i++) {
+        words[i >>> 2] |= (bytes[i] & 0xff) << (24 - (i % 4) * 8);
+    }
+    return CryptoJS.lib.WordArray.create(words, bytes.length);
+}
+
+function wordArrayToBytes(wa) {
+    const { words, sigBytes } = wa;
+    const bytes = [];
+    for (let i = 0; i < sigBytes; i++) {
+        bytes.push((words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff);
+    }
+    return bytes;
+}
+
+/* ====== 加密 ====== */
 function encryptText() {
     const text = document.getElementById('inputText').value;
     if (!text) { alert("请输入需要加密的内容!"); return; }
     const ki = getKeyAndIV(); if (!ki) return;
+    const charset = getCharset(); if (!charset) return;
     const mode = document.getElementById('mode').value;
 
     try {
@@ -133,28 +228,40 @@ function encryptText() {
         if (mode === 'CBC') options.iv = ki.iv;
 
         const encrypted = CryptoJS.AES.encrypt(text, ki.key, options);
-        document.getElementById('outputText').value = encrypted.toString();
+        const cipherBytes = wordArrayToBytes(encrypted.ciphertext);
+        const result = bytesToCustom(cipherBytes, charset);
+
+        document.getElementById('outputText').value = result;
     } catch (e) {
         alert("加密失败: " + e.message);
     }
 }
 
+/* ====== 解密 ====== */
 function decryptText() {
-    const text = document.getElementById('inputText').value;
+    const text = document.getElementById('inputText').value.trim();
     if (!text) { alert("请输入需要解密的密文!"); return; }
     const ki = getKeyAndIV(); if (!ki) return;
+    const charset = getCharset(); if (!charset) return;
     const mode = document.getElementById('mode').value;
 
     try {
+        const cipherBytes = customToBytes(text, charset);
+        const cipherWA = bytesToWordArray(cipherBytes);
+
         const options = {
             mode: mode === 'CBC' ? CryptoJS.mode.CBC : CryptoJS.mode.ECB,
             padding: CryptoJS.pad.Pkcs7
         };
         if (mode === 'CBC') options.iv = ki.iv;
 
-        const decrypted = CryptoJS.AES.decrypt(text, ki.key, options);
+        const decrypted = CryptoJS.AES.decrypt(
+            { ciphertext: cipherWA },
+            ki.key,
+            options
+        );
         const result = decrypted.toString(CryptoJS.enc.Utf8);
-        if (!result) throw new Error("密钥或密文错误");
+        if (!result) throw new Error("密钥、IV、字符集或密文错误");
         document.getElementById('outputText').value = result;
     } catch (e) {
         alert("解密失败: " + e.message);
